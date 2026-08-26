@@ -1,26 +1,90 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: 248 250 252;
+  --foreground: 15 23 42;
+
+  --ekvity-blue: 15 42 80;
+  --ekvity-green: 22 163 74;
+
+  --ekvity-grey: 71 85 105;
+  --ekvity-light-grey: 148 163 184;
+
+  --card: 255 255 255;
+  --border: 226 232 240;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Tailwind v4 reads theme tokens from CSS, not tailwind.config.ts.
+   Without this @theme block, the color utility classes used across
+   the app (ekvity-blue, bg-background, border-input, etc.) compile
+   to nothing. */
+@theme {
+  --font-sans: "Inter", sans-serif;
+
+  --color-ekvity-blue: rgb(var(--ekvity-blue));
+  --color-ekvity-green: rgb(var(--ekvity-green));
+  --color-ekvity-grey: rgb(var(--ekvity-grey));
+  --color-ekvity-light-grey: rgb(var(--ekvity-light-grey));
+  --color-ekvity-bg: rgb(var(--background));
+
+  --color-background: rgb(var(--background));
+  --color-foreground: rgb(var(--foreground));
+  --color-card: rgb(var(--card));
+  --color-border: rgb(var(--border));
+  --color-input: rgb(var(--border));
+  --color-ring: rgb(var(--ekvity-blue));
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: rgb(var(--border));
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: "Inter", sans-serif;
+  background: rgb(var(--background));
+  color: rgb(var(--foreground));
+  font-size: 14px;
+  font-weight: 400;
+}
+
+@media print {
+  body {
+    background: white;
+    margin: 0;
+    padding: 0;
+  }
+  
+  /* Hide UI elements not meant for PDF */
+  aside, header, .print\:hidden {
+    display: none !important;
+  }
+
+  /* Reset layout constraints to use full page */
+  main, .flex-1, .h-screen {
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  /* Target the document container */
+  .document-print {
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 2cm !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Ensure background colors (like table headers) print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  
+  /* Prevent page breaks inside tables and crucial blocks */
+  table, .mb-8 {
+    page-break-inside: avoid;
+  }
 }
