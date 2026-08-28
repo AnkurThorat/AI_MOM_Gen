@@ -1,32 +1,48 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, use } from "react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
+
 import { createClient } from "@/lib/supabase/client";
+
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+
+import SendMomEmailModal from "@/components/mom/SendMomEmailModal";
+
 import {
   Loader2,
   Printer,
   Download,
   CheckCircle,
   RefreshCw,
-  Award,
+  Mail,
 } from "lucide-react";
+
 import { COMPANY_CONFIG } from "@/lib/config/company";
 import { getJson, postJson, putJson, ApiError } from "@/lib/http";
+
 import type { Database, Deliverable } from "@/types/database.types";
+import jsPDF from "jspdf";
+import { toPng } from "html-to-image";
 
 type Mom = Database["public"]["Tables"]["moms"]["Row"];
+
 type UserProfile = {
   name: string | null | undefined;
   email: string | undefined;
 };
 
-// Only used to auto-refresh the read-only status badge while a generation started
-// elsewhere (another tab, or the create flow) is still running. Never triggers generation.
 const GENERATING_POLL_MS = 4000;
+
+// A4 page height in px at the 794px capture width used below (794px ≈
+// 210mm, so 297mm ≈ 1123px at the same scale). Each page section below is
+// given this as a min-height so it always *looks* like a full page, and a
+// flex column so its footer is pinned to the bottom natively — no JS
+// measurement needed for the common (content fits on one page) case.
+const PAGE_WIDTH_PX = 794;
+const PAGE_HEIGHT_PX = 1122;
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   final: "bg-green-100 text-green-700",
@@ -34,36 +50,65 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   generating: "bg-blue-100 text-blue-700",
 };
 
-// Static regulatory / letterhead details that appear on every MoM, taken from the
-// official Ekvity letterhead. If these ever change, they should move into
-// COMPANY_CONFIG so there is a single source of truth — kept local for now so this
-// page doesn't depend on config fields that don't exist yet.
 const COMPLIANCE = {
   gstRegNo: "27AAEFF8260D1ZJ",
   sebiRegNo: "INA000006952",
   regType: "Non-Individual",
   regValidity: "Perpetual",
   bseEnlistmentNo: "1749",
+
   registeredAddress:
     "21, Vidya Villa, Bldg. No. 2, Old Nagardas Road, Andheri East, Mumbai, Maharashtra, 400 069",
+  corporateAddress:
+    "1320, 13th Floor, Solaris One CSL, NS Phadke Marg, Andheri East, Mumbai - 400 069",
+
   contactNo: "+91 98339 08099",
+
   investorsEmail: "investors@ekvity.com",
+
   sebiOfficeAddress:
     "Plot No. C 4-A, G Block, Near Bank of India, Bandra Kurla Complex, Bandra East, Mumbai, Maharashtra 400 051",
+
   principalOfficer: {
     name: "Mr. Kharanshu Parikh",
     contact: "+91 98339 08072",
     email: "kharanshu.parikh@ekvity.com",
   },
+
   complianceOfficer: {
     name: "Mr. Smit Vipul Jhaveri",
     contact: "+91 98337 77278",
     email: "smit.jhaveri@ekvity.com",
   },
+
+  personsAssociated: [
+    {
+      name: "Mr. Karan Samir Parekh",
+      contact: "+91 81081 16840",
+      email: "karan.parekh@ekvity.com",
+    },
+    {
+      name: "Ms. Pratiksha Anand Nikam",
+      contact: "+91 82681 84874",
+      email: "pratiksha.nikam@ekvity.com",
+    },
+    {
+      name: "Mr. Omkar Haridas Dahule",
+      contact: "+91 70209 13044",
+      email: "omkar.dahule@ekvity.com",
+    },
+    {
+      name: "Mr. Karan Manish Shah",
+      contact: "+91 96192 80008",
+      email: "karan.shah@ekvity.com",
+    },
+  ],
 };
 
-// Executive summary points may contain **bold** markers (matching how the printed
-// MoM highlights figures/terms). Render those inline instead of stripping them.
+// Brand gradient used for the diagonal blue -> green divider bars.
+const BRAND_GRADIENT =
+  "linear-gradient(78deg, #12294B 0%, #12294B 46%, #2E9E5B 54%, #2E9E5B 100%)";
+
 function renderFormatted(text: string) {
   return text.split(/(\*\*[^*]+\*\*)/g).map((chunk, i) =>
     chunk.startsWith("**") && chunk.endsWith("**") ? (
@@ -76,49 +121,291 @@ function renderFormatted(text: string) {
   );
 }
 
+// Letterhead (logo + company name + compliance line + brand divider).
+// Repeated at the top of every page, so it's a function, not a duplicated block.
+function Letterhead() {
+  return (
+    <>
+      <div className="px-8 md:px-14 pt-8 md:pt-10">
+        <div className="flex items-start justify-between gap-6">
+          <img
+            src="/ekvity_logo.png"
+            alt={COMPANY_CONFIG.name}
+            className="h-14 md:h-16 w-auto shrink-0"
+          />
+
+          <div className="text-right">
+            <h1 className="text-2xl md:text-[28px] font-bold text-ekvity-blue tracking-tight leading-none">
+              {COMPANY_CONFIG.name}
+            </h1>
+
+            <div className="mt-2 text-[11px] leading-[1.6] text-gray-500">
+              <p>
+                <span className="font-semibold text-gray-600">
+                  GST Reg. No.:
+                </span>{" "}
+                {COMPLIANCE.gstRegNo}
+              </p>
+
+              <p>
+                <span className="font-semibold text-gray-600">
+                  SEBI Reg. No.:
+                </span>{" "}
+                {COMPLIANCE.sebiRegNo}
+              </p>
+
+              <p>
+                <span className="font-semibold text-gray-600">
+                  Type of Reg.:
+                </span>{" "}
+                {COMPLIANCE.regType}
+              </p>
+
+              <p>
+                <span className="font-semibold text-gray-600">
+                  Validity of Reg.:
+                </span>{" "}
+                {COMPLIANCE.regValidity}
+              </p>
+
+              <p>
+                <span className="font-semibold text-gray-600">
+                  BSE Enlistment No.:
+                </span>{" "}
+                {COMPLIANCE.bseEnlistmentNo}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="h-2.5 mt-4" style={{ background: BRAND_GRADIENT }} />
+    </>
+  );
+}
+
+// Page footer (registered/corporate addresses + contact + brand bar).
+// Same repeat-per-page situation as the letterhead above.
+function PageFooter() {
+  return (
+    <div className="px-8 md:px-14 pt-6">
+      <div className="flex items-end justify-between gap-6 text-[9px] leading-[1.6] text-gray-500 border-t border-gray-200 pt-3">
+        <div>
+          <p>Regd. Add.: {COMPLIANCE.registeredAddress}</p>
+          <p>Corp. Add.: {COMPLIANCE.corporateAddress}</p>
+          <p>SEBI Regional Office Add.: {COMPLIANCE.sebiOfficeAddress}</p>
+          <p>
+            Contact: {COMPLIANCE.contactNo} | {COMPLIANCE.investorsEmail} |
+            www.ekvity.com
+          </p>
+        </div>
+
+        {/* Optional decade-mark logo — add /public/10ure_logo.png to show it */}
+        <img
+          src="/10ure_logo.png"
+          alt=""
+          className="h-8 w-auto shrink-0"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
+        />
+      </div>
+
+      <div className="h-1.5 mt-3" style={{ background: BRAND_GRADIENT }} />
+    </div>
+  );
+}
+
+// Screenshots one page section and drops it into the PDF, starting a new
+// PDF page first unless it's the very first section. Reuses the same
+// "slice a tall image across pages" logic per section, so a section IS
+// allowed to overflow one page on its own if its content is unusually long.
+// ponytail: an overflowing section repeats neither its header nor its
+// footer on the extra pages it spills onto (they're baked into one
+// screenshot, not re-rendered per page) — fine for meeting-note-length
+// content; if long MoMs become common, that needs real per-page reflow
+// (e.g. Paged.js or server-side rendering), not a bigger screenshot hack.
+async function addSectionToPdf(
+  pdf: jsPDF,
+  sectionEl: HTMLElement,
+  isFirstSection: boolean,
+) {
+  /*
+   * Capture the complete section.
+   */
+  const dataUrl = await toPng(sectionEl, {
+    cacheBust: true,
+    backgroundColor: "#ffffff",
+    pixelRatio: 1.5,
+    skipAutoScale: true,
+    width: PAGE_WIDTH_PX,
+    height: sectionEl.scrollHeight,
+    style: {
+      width: `${PAGE_WIDTH_PX}px`,
+      backgroundColor: "#ffffff",
+      color: "#111827",
+      overflow: "visible",
+    },
+  });
+
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+
+  const documentWidth = sectionEl.scrollWidth;
+  const documentHeight = sectionEl.scrollHeight;
+
+  const pdfImageWidth = pageWidth;
+
+  const pdfImageHeight = (documentHeight * pdfImageWidth) / documentWidth;
+
+  /*
+   * Add a new page only when this is not the first section.
+   */
+  if (!isFirstSection) {
+    pdf.addPage();
+  }
+
+  /*
+   * IMPORTANT:
+   *
+   * A4 CSS height can differ by a fraction of a pixel because of
+   * browser rounding.
+   *
+   * Without tolerance, 297.01mm can create an unnecessary blank page.
+   */
+  const PAGE_TOLERANCE_MM = 2;
+
+  /*
+   * If content fits within one page, render it as ONE page only.
+   */
+  if (pdfImageHeight <= pageHeight + PAGE_TOLERANCE_MM) {
+    pdf.addImage(
+      dataUrl,
+      "PNG",
+      0,
+      0,
+      pdfImageWidth,
+      Math.min(pdfImageHeight, pageHeight),
+      undefined,
+      "FAST",
+    );
+
+    return;
+  }
+
+  /*
+   * Multi-page content.
+   *
+   * The image is positioned upward on every following page.
+   * A small tolerance prevents an extra blank page caused by
+   * floating-point rounding.
+   */
+  let remainingHeight = pdfImageHeight;
+  let position = 0;
+
+  pdf.addImage(
+    dataUrl,
+    "PNG",
+    0,
+    position,
+    pdfImageWidth,
+    pdfImageHeight,
+    undefined,
+    "FAST",
+  );
+
+  remainingHeight -= pageHeight;
+
+  while (remainingHeight > PAGE_TOLERANCE_MM) {
+    position -= pageHeight;
+
+    pdf.addPage();
+
+    pdf.addImage(
+      dataUrl,
+      "PNG",
+      0,
+      position,
+      pdfImageWidth,
+      pdfImageHeight,
+      undefined,
+      "FAST",
+    );
+
+    remainingHeight -= pageHeight;
+  }
+}
+
 export default function MoMReviewPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+
   const router = useRouter();
+
   const supabase = createClient();
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
+
   const [actionError, setActionError] = useState("");
+
   const [mom, setMom] = useState<Mom | null>(null);
+
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
   const [isEditMode, setIsEditMode] = useState(false);
+
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+
   const generatingRef = useRef(false);
+
+  /*
+   * IMPORTANT:
+   * This ref wraps both page sections — used for width-forcing and image
+   * discovery during export. The actual screenshots are taken per-section
+   * via page1Ref / page2Ref below.
+   */
+  const momPdfRef = useRef<HTMLDivElement>(null);
+
+  // Page 1: header + MoM content + footer, as one self-contained section.
+  const page1Ref = useRef<HTMLDivElement>(null);
+  // Page 2 (always the last page): header + regulatory disclosure + footer.
+  const page2Ref = useRef<HTMLDivElement>(null);
 
   const fetchMom = useCallback(async () => {
     const { data } = await getJson<{ data: Mom }>(`/api/moms/${id}`);
+
     setMom(data);
+
     return data;
   }, [id]);
 
-  // Fetches once when the id changes. This is the only place the review page reads
-  // the MoM — it never calls the generate endpoint itself.
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       setLoading(true);
+
       setLoadError("");
+
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
+
         if (user) {
           const { data: profile } = await supabase
             .from("profiles")
             .select("full_name")
             .eq("id", user.id)
             .single();
+
           if (!cancelled) {
             setUserProfile({
               name: profile?.full_name?.trim(),
@@ -126,6 +413,7 @@ export default function MoMReviewPage({
             });
           }
         }
+
         await fetchMom();
       } catch (err) {
         if (!cancelled) {
@@ -134,39 +422,62 @@ export default function MoMReviewPage({
           );
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
     load();
+
     return () => {
       cancelled = true;
     };
-  }, [id, fetchMom, supabase]);
+  }, [fetchMom, supabase]);
 
+  /*
+   * Auto-refresh while AI is generating.
+   */
   useEffect(() => {
-    if (mom?.status !== "generating") return;
+    if (mom?.status !== "generating") {
+      return;
+    }
+
     const interval = setInterval(() => {
       fetchMom().catch(() => {});
     }, GENERATING_POLL_MS);
-    return () => clearInterval(interval);
+
+    return () => {
+      clearInterval(interval);
+    };
   }, [mom?.status, fetchMom]);
 
   const handleGenerate = async (isRegenerate: boolean) => {
-    if (generatingRef.current) return;
+    if (generatingRef.current) {
+      return;
+    }
+
     if (isRegenerate) {
       const confirmed = window.confirm(
         "Regenerating will replace the current executive summary and deliverables. Continue?",
       );
-      if (!confirmed) return;
+
+      if (!confirmed) {
+        return;
+      }
     }
 
     generatingRef.current = true;
+
     setGenerating(true);
+
     setActionError("");
 
     try {
-      await postJson("/api/ai/generate-mom", { momId: id });
+      await postJson("/api/ai/generate-mom", {
+        momId: id,
+      });
+
       await fetchMom();
     } catch (err: unknown) {
       setActionError(
@@ -174,14 +485,20 @@ export default function MoMReviewPage({
       );
     } finally {
       setGenerating(false);
+
       generatingRef.current = false;
     }
   };
 
-  const handleSave = async (status: "draft" | "final") => {
-    if (!mom) return;
+  const handleSave = async (status: "draft" | "final"): Promise<boolean> => {
+    if (!mom) {
+      return false;
+    }
+
     setSaving(true);
+
     setActionError("");
+
     try {
       await putJson(`/api/moms/${id}`, {
         executive_summary: mom.executive_summary ?? [],
@@ -189,18 +506,197 @@ export default function MoMReviewPage({
         eia_deliverables: mom.eia_deliverables ?? [],
         status,
       });
+
       setIsEditMode(false);
+
       await fetchMom();
+
+      return true;
     } catch (err: unknown) {
       setActionError(
         err instanceof ApiError ? err.message : "Failed to save MoM",
       );
+
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
-  const handlePrint = () => window.print();
+  const handleFinalize = async () => {
+    const success = await handleSave("final");
+
+    if (success) {
+      setEmailModalOpen(true);
+    }
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  /*
+   * Generate compressed PDF.
+   *
+   * This function is used by:
+   * 1. Save PDF
+   * 2. Send Email
+   */
+  const generateMomPdf = async (): Promise<Blob> => {
+    const container = momPdfRef.current;
+    const page1El = page1Ref.current;
+    const page2El = page2Ref.current;
+
+    if (!container || !page1El || !page2El) {
+      throw new Error("MoM content not found.");
+    }
+
+    /*
+     * Make sure the MoM content has finished rendering.
+     */
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    /*
+     * Wait for fonts before capturing the document.
+     */
+    if ("fonts" in document) {
+      await document.fonts.ready;
+    }
+
+    /*
+     * Wait for all images inside the MoM document (both page sections).
+     * This is important for the Ekvity logo.
+     */
+    const images = Array.from(
+      container.querySelectorAll<HTMLImageElement>("img"),
+    );
+
+    await Promise.all(
+      images.map((image) => {
+        if (image.complete) {
+          return Promise.resolve();
+        }
+
+        return new Promise<void>((resolve) => {
+          image.onload = () => resolve();
+          image.onerror = () => resolve();
+        });
+      }),
+    );
+
+    /*
+     * Save the original inline styles so they can be restored
+     * after PDF generation.
+     */
+    const originalWidth = container.style.width;
+    const originalMaxWidth = container.style.maxWidth;
+    const originalMargin = container.style.margin;
+    const originalBoxShadow = container.style.boxShadow;
+    const originalBackground = container.style.background;
+    const originalBorder = container.style.border;
+    const originalOverflow = container.style.overflow;
+
+    try {
+      /*
+       * Force the document into exact A4 dimensions before capture.
+       * 794px is approximately 210mm at standard CSS rendering.
+       */
+      container.style.width = `${PAGE_WIDTH_PX}px`;
+      container.style.maxWidth = `${PAGE_WIDTH_PX}px`;
+      container.style.margin = "0";
+      container.style.boxShadow = "none";
+      container.style.background = "#ffffff";
+      container.style.border = "none";
+      container.style.overflow = "visible";
+
+      /*
+       * Give the browser a moment to recalculate the layout.
+       */
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+
+      /*
+       * Create an A4 PDF and add each page section as its own PDF page(s).
+       * Each section already pins its own header/footer via flexbox, so no
+       * cross-section spacer math is needed — page 2 always starts fresh.
+       */
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+        compress: true,
+      });
+
+      await addSectionToPdf(pdf, page1El, true);
+      await addSectionToPdf(pdf, page2El, false);
+
+      return pdf.output("blob");
+    } finally {
+      /*
+       * Restore the original page styles.
+       */
+      container.style.width = originalWidth;
+      container.style.maxWidth = originalMaxWidth;
+      container.style.margin = originalMargin;
+      container.style.boxShadow = originalBoxShadow;
+      container.style.background = originalBackground;
+      container.style.border = originalBorder;
+      container.style.overflow = originalOverflow;
+    }
+  };
+
+  /*
+   * Download PDF.
+   */
+  const handleSavePdf = async () => {
+    try {
+      setActionError("");
+
+      const pdfBlob = await generateMomPdf();
+
+      if (!pdfBlob) {
+        setActionError("Failed to generate the MoM PDF.");
+        return;
+      }
+
+      const fileName = `MoM-${
+        mom?.meeting_title
+          ?.replace(/[^a-zA-Z0-9-_]/g, "-")
+          .replace(/-+/g, "-") || "document"
+      }.pdf`;
+
+      const url = URL.createObjectURL(pdfBlob);
+
+      const link = document.createElement("a");
+
+      link.href = url;
+
+      link.download = fileName;
+
+      document.body.appendChild(link);
+
+      link.click();
+
+      document.body.removeChild(link);
+
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to generate MoM PDF:", error);
+
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Failed to generate the MoM PDF.",
+      );
+    }
+  };
 
   if (loading) {
     return (
@@ -214,6 +710,7 @@ export default function MoMReviewPage({
     return (
       <div className="max-w-xl mx-auto mt-20 text-center space-y-4">
         <p className="text-red-500">{loadError || "MoM not found"}</p>
+
         <Button variant="outline" onClick={() => router.push("/dashboard")}>
           Back to Dashboard
         </Button>
@@ -222,18 +719,32 @@ export default function MoMReviewPage({
   }
 
   const isGenerating = generating || mom.status === "generating";
-  // Whether AI content has ever been generated for this MoM — independent of `status`,
-  // since "Save Draft" can set status back to "draft" while keeping the generated content.
+
   const hasContent = mom.ai_generated;
+
+  /*
+   * DESIGN NOTE:
+   * The reference letterhead includes a "Risk Profile & Suitability"
+   * paragraph. This reads an optional `risk_profile` field off the mom
+   * record so nothing breaks if that field isn't in your schema yet —
+   * rename it below to match your actual column if it's called
+   * something else, or wire it up in the generator/save payload.
+   */
+  const riskProfile = (mom as unknown as { risk_profile?: string | null })
+    .risk_profile;
 
   return (
     <div className="space-y-6">
-      {/* Hide controls during print */}
+      {/* ================================
+          TOP CONTROLS
+          NOT INCLUDED IN PDF
+      ================================= */}
       <div className="print:hidden flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
         <div className="flex items-center gap-4">
           <h1 className="text-xl font-semibold text-ekvity-blue">
             Review Document
           </h1>
+
           <span
             className={`px-3 py-1 rounded-full text-xs font-medium ${
               STATUS_BADGE_CLASS[mom.status] ?? "bg-yellow-100 text-yellow-700"
@@ -242,6 +753,7 @@ export default function MoMReviewPage({
             {mom.status.toUpperCase()}
           </span>
         </div>
+
         <div className="flex gap-3">
           {mom.status !== "final" &&
             !hasContent &&
@@ -255,28 +767,28 @@ export default function MoMReviewPage({
                 ) : (
                   <RefreshCw className="w-4 h-4 mr-2" />
                 )}
+
                 {mom.status === "failed" ? "Retry Generation" : "Generate MoM"}
               </Button>
             )}
+
           {mom.status !== "final" && hasContent && (
             <Button
               variant="outline"
               onClick={() => handleGenerate(true)}
               disabled={isGenerating}
             >
-              {isGenerating ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4 mr-2" />
-              )}
+              <RefreshCw className="w-4 h-4 mr-2" />
               Regenerate
             </Button>
           )}
+
           {!isEditMode && hasContent && mom.status !== "final" && (
             <Button variant="outline" onClick={() => setIsEditMode(true)}>
               Edit Content
             </Button>
           )}
+
           {isEditMode && (
             <Button
               variant="outline"
@@ -290,25 +802,44 @@ export default function MoMReviewPage({
               )}
             </Button>
           )}
+
           {mom.status !== "final" && hasContent && (
             <Button
-              onClick={() => handleSave("final")}
+              onClick={handleFinalize}
               className="bg-ekvity-green hover:bg-ekvity-green/90"
               disabled={saving}
             >
-              <CheckCircle className="w-4 h-4 mr-2" /> Finalize MoM
+              <CheckCircle className="w-4 h-4 mr-2" />
+              Finalize MoM
             </Button>
           )}
+
           {mom.status === "final" && (
             <>
               <Button variant="outline" onClick={handlePrint}>
-                <Printer className="w-4 h-4 mr-2" /> Print
+                <Printer className="w-4 h-4 mr-2" />
+                Print
               </Button>
+
               <Button
-                onClick={handlePrint}
+                type="button"
+                onClick={handleSavePdf}
                 className="bg-ekvity-blue hover:bg-ekvity-blue/90"
               >
-                <Download className="w-4 h-4 mr-2" /> Save PDF
+                <Download className="w-4 h-4 mr-2" />
+                Save PDF
+              </Button>
+
+              <Button
+                type="button"
+                onClick={() => {
+                  setActionError("");
+                  setEmailModalOpen(true);
+                }}
+                className="bg-ekvity-green hover:bg-ekvity-green/90"
+              >
+                <Mail className="w-4 h-4 mr-2" />
+                Send via Email
               </Button>
             </>
           )}
@@ -328,346 +859,387 @@ export default function MoMReviewPage({
       {mom.status === "failed" && (
         <p className="print:hidden text-sm text-red-500 px-4">
           The last generation attempt failed. Your notes were preserved — click
-          &quot;Retry Generation&quot; above to try again.
+          Retry Generation above.
         </p>
       )}
 
       {isEditMode && (
         <p className="print:hidden text-xs text-ekvity-grey px-4 -mt-2">
-          Tip: wrap key figures in{" "}
-          <span className="font-mono">**double asterisks**</span> to bold them
-          in the printed summary, just like the official letterhead.
+          Tip: wrap important text with{" "}
+          <span className="font-mono">**double asterisks**</span> to make it
+          bold.
         </p>
       )}
 
-      {/* A4 Document Container — mirrors the official Ekvity MoM letterhead */}
+      {/* =================================
+          ACTUAL MOM DOCUMENT
+          THIS ENTIRE SECTION BECOMES PDF
+      ================================== */}
       <div
-        className="document-print bg-ekvity-bg/50 md:bg-white md:shadow-lg md:mx-auto md:max-w-[210mm] md:min-h-[297mm] border border-gray-200 overflow-hidden"
-        style={{ WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}
+        id="mom-pdf-content"
+        ref={momPdfRef}
+        data-mom-pdf="true"
+        className="document-print bg-ekvity-bg/50 md:bg-white md:shadow-lg md:mx-auto md:max-w-[210mm] border border-gray-200 overflow-hidden"
+        style={{
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust: "exact",
+        }}
       >
-        {/* Letterhead */}
-        <div className="px-8 md:px-14 pt-8 md:pt-10">
-          <div className="flex items-start justify-between gap-6">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/ekvity_logo.png"
-              alt={COMPANY_CONFIG.name}
-              className="h-14 md:h-16 w-auto shrink-0"
-            />
-            <div className="text-right">
-              <h1 className="text-2xl md:text-[28px] font-bold text-ekvity-blue tracking-tight leading-none">
-                {COMPANY_CONFIG.name}
-              </h1>
-              <div className="mt-2 text-[11px] leading-[1.6] text-gray-500">
-                <p>
-                  <span className="font-semibold text-gray-600">
-                    GST Reg. No.:
-                  </span>{" "}
-                  {COMPLIANCE.gstRegNo}
-                </p>
-                <p>
-                  <span className="font-semibold text-gray-600">
-                    SEBI Reg. No.:
-                  </span>{" "}
-                  {COMPLIANCE.sebiRegNo}
-                </p>
-                <p>
-                  <span className="font-semibold text-gray-600">
-                    Type of Reg.:
-                  </span>{" "}
-                  {COMPLIANCE.regType}
-                </p>
-                <p>
-                  <span className="font-semibold text-gray-600">
-                    Validity of Reg.:
-                  </span>{" "}
-                  {COMPLIANCE.regValidity}
-                </p>
-                <p>
-                  <span className="font-semibold text-gray-600">
-                    BSE Enlistment No.:
-                  </span>{" "}
-                  {COMPLIANCE.bseEnlistmentNo}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Certification mark, echoing the letterhead's "Great Place To Work" badge */}
-          {/* <div className="flex justify-end mt-2">
-            <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
-              <Award
-                className="w-3.5 h-3.5 text-ekvity-green"
-                strokeWidth={2}
-              />
-              <span>Great Place To Work® Certified</span>
-            </div>
-          </div> */}
-        </div>
-
-        {/* Diagonal brand divider */}
+        {/* ============ PAGE 1: header + MoM content + footer ============ */}
         <div
-          className="h-2 mt-3"
+          ref={page1Ref}
+          className="flex flex-col bg-white"
           style={{
-            background:
-              "linear-gradient(78deg, #12294B 0%, #12294B 46%, #2E9E5B 54%, #2E9E5B 100%)",
+            width: `${PAGE_WIDTH_PX}px`,
+            minHeight: `${PAGE_HEIGHT_PX}px`,
+            boxSizing: "border-box",
           }}
-        />
+        >
+          <Letterhead />
 
-        <div className="px-8 md:px-14 pb-10 md:pb-14">
-          {/* Meeting title (if set) */}
-          {mom.meeting_title && (
-            <h2 className="text-base md:text-lg font-semibold text-ekvity-blue mt-6 mb-2">
-              {mom.meeting_title}
-            </h2>
-          )}
+          <div className="flex-1 px-8 md:px-14 pb-6 md:pb-8">
+            {mom.meeting_title && (
+              <h2 className="text-base md:text-lg font-semibold text-ekvity-blue mt-6 mb-2">
+                {mom.meeting_title}
+              </h2>
+            )}
 
-          {/* Meeting / Date bar */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 bg-[#E7E6E6] px-4 md:px-5 py-2.5 text-sm text-ekvity-blue mt-4">
-            <span>
-              <span className="font-semibold">Meeting:</span> {mom.mode}
-            </span>
-            {mom.start_time && (
+            {/* Meeting Information */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 bg-[#E7E6E6] px-4 md:px-5 py-2.5 text-sm text-ekvity-blue mt-4">
               <span>
-                <span className="font-semibold">Time:</span> {mom.start_time}
+                <span className="font-semibold">Meeting:</span> {mom.mode}
               </span>
-            )}
-            <span>
-              <span className="font-semibold">Date:</span> {mom.meeting_date}
-            </span>
-          </div>
 
-          {/* Section title bar */}
-          <div className="bg-[#5A5A5A] text-white text-center text-sm font-bold tracking-wide py-2 mb-6">
-            MINUTES OF THE MEETING
-          </div>
+              {mom.start_time && (
+                <span>
+                  <span className="font-semibold">Time:</span> {mom.start_time}
+                </span>
+              )}
 
-          {/* Attendance */}
-          <div className="mb-6">
-            <h4 className="font-bold text-gray-900 underline underline-offset-2 mb-2 text-[15px]">
-              In Attendance:
-            </h4>
-            <ol className="list-decimal list-outside ml-5 space-y-1 text-sm text-gray-800">
-              {mom.participants.map((p, i) => (
-                <li key={i} className="pl-1">
-                  {p.name}
-                  {p.role && <> – {p.role}</>}
-                  {p.client_code && <> (Client Code – {p.client_code})</>}
-                  {p.is_logged_in_user && <> (EIA / Investment Adviser)</>}
-                </li>
-              ))}
-            </ol>
-          </div>
+              <span>
+                <span className="font-semibold">Date:</span> {mom.meeting_date}
+              </span>
+            </div>
 
-          {/* Executive Summary */}
-          <div className="mb-6">
-            <h4 className="font-bold text-gray-900 underline underline-offset-2 mb-2 text-[15px]">
-              Executive Summary:
-            </h4>
-            {hasContent && (
-              <p className="text-sm text-gray-800 mb-2">
-                The following points were discussed in detail:
-              </p>
-            )}
-            {isEditMode ? (
-              <Textarea
-                className="w-full min-h-[150px] text-sm"
-                value={(mom.executive_summary ?? []).join("\n")}
-                onChange={(e) =>
-                  setMom({
-                    ...mom,
-                    executive_summary: e.target.value.split("\n"),
-                  })
-                }
-              />
-            ) : hasContent ? (
-              <ol className="list-decimal list-outside ml-5 space-y-2 text-gray-800 text-sm">
-                {mom.executive_summary?.map((point: string, i: number) => (
+            {/* MOM TITLE */}
+            <div className="bg-[#5A5A5A] text-white text-center text-sm font-bold tracking-wide py-2 mb-6">
+              MINUTES OF THE MEETING
+            </div>
+
+            {/* ATTENDANCE */}
+            <div className="mb-6">
+              <h4 className="font-bold text-gray-900 underline underline-offset-2 mb-2 text-[15px]">
+                In Attendance:
+              </h4>
+
+              <ol className="list-decimal list-outside ml-5 space-y-1 text-sm text-gray-800">
+                {mom.participants.map((p, i) => (
                   <li key={i} className="pl-1">
-                    {renderFormatted(point)}
+                    {p.name}
+
+                    {p.role && <> – {p.role}</>}
+
+                    {p.client_code && <> (Client Code – {p.client_code})</>}
+
+                    {p.is_logged_in_user && <> (EIA / Investment Adviser)</>}
                   </li>
                 ))}
               </ol>
-            ) : (
-              <p className="text-sm text-gray-400 italic">
-                No generated content yet.
-              </p>
+            </div>
+
+            {/* EXECUTIVE SUMMARY */}
+            <div className="mb-6">
+              <h4 className="font-bold text-gray-900 underline underline-offset-2 mb-2 text-[15px]">
+                Executive Summary:
+              </h4>
+
+              {hasContent && (
+                <p className="text-sm text-gray-800 mb-2">
+                  The following points were discussed in detail:
+                </p>
+              )}
+
+              {isEditMode ? (
+                <Textarea
+                  className="w-full min-h-[150px] text-sm"
+                  value={(mom.executive_summary ?? []).join("\n")}
+                  onChange={(e) =>
+                    setMom({
+                      ...mom,
+                      executive_summary: e.target.value.split("\n"),
+                    })
+                  }
+                />
+              ) : hasContent ? (
+                <ol className="list-decimal list-outside ml-5 space-y-2 text-gray-800 text-sm">
+                  {mom.executive_summary?.map((point: string, i: number) => (
+                    <li key={i} className="pl-1">
+                      {renderFormatted(point)}
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="text-sm text-gray-400 italic">
+                  No generated content yet.
+                </p>
+              )}
+            </div>
+
+            {/* RISK PROFILE & SUITABILITY */}
+            {riskProfile && (
+              <div className="mb-6">
+                <h4 className="font-bold text-gray-900 underline underline-offset-2 mb-2 text-[15px]">
+                  Risk Profile &amp; Suitability:
+                </h4>
+
+                <p className="text-sm text-gray-800 leading-relaxed">
+                  The client&apos;s risk profile is assessed as [{riskProfile}].
+                  The advice is based on the client&apos;s assessed
+                  requirements, goals, investment horizon, financial position,
+                  as understood and recorded at the time of analysis. Based on
+                  this assessment, the proposed solution is considered suitable
+                  and aligned with the client&apos;s requirements and risk
+                  profile.
+                </p>
+              </div>
             )}
+
+            {/* DELIVERABLES */}
+            <div className="mb-2">
+              <h4 className="font-bold text-gray-900 underline underline-offset-2 mb-3 text-[15px]">
+                Deliverables:
+              </h4>
+
+              {/* FROM CLIENT */}
+              <p className="font-semibold text-sm text-gray-900 underline underline-offset-2 mb-2">
+                1. From Client
+              </p>
+
+              <table className="w-full text-sm text-left mb-6 border border-gray-400 border-collapse">
+                <thead>
+                  <tr className="bg-[#70AD47] text-white">
+                    <th className="px-4 py-2 w-20 border-r border-white/40 font-semibold">
+                      Sr. No.
+                    </th>
+
+                    <th className="px-4 py-2 font-semibold">Particulars</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {(mom.client_deliverables?.length ?? 0) === 0 && (
+                    <tr>
+                      <td
+                        colSpan={2}
+                        className="px-4 py-2 text-center text-gray-400 border border-gray-300"
+                      >
+                        No deliverables
+                      </td>
+                    </tr>
+                  )}
+
+                  {mom.client_deliverables?.map((d: Deliverable, i: number) => (
+                    <tr key={i} className="border border-gray-300">
+                      <td className="px-4 py-2 border-r border-gray-300 text-center">
+                        {i + 1}
+                      </td>
+
+                      <td className="px-4 py-2">
+                        {isEditMode ? (
+                          <Input
+                            value={d.particular}
+                            onChange={(e) => {
+                              const newDeliverables = [
+                                ...(mom.client_deliverables ?? []),
+                              ];
+
+                              newDeliverables[i] = {
+                                ...newDeliverables[i],
+                                particular: e.target.value,
+                              };
+
+                              setMom({
+                                ...mom,
+                                client_deliverables: newDeliverables,
+                              });
+                            }}
+                          />
+                        ) : (
+                          d.particular
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* FROM EIA */}
+              <p className="font-semibold text-sm text-gray-900 underline underline-offset-2 mb-2">
+                2. From EIA
+              </p>
+
+              <table className="w-full text-sm text-left border border-gray-400 border-collapse">
+                <thead>
+                  <tr className="bg-[#70AD47] text-white">
+                    <th className="px-4 py-2 w-20 border-r border-white/40 font-semibold">
+                      Sr. No.
+                    </th>
+
+                    <th className="px-4 py-2 font-semibold">Particulars</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {(mom.eia_deliverables?.length ?? 0) === 0 && (
+                    <tr>
+                      <td
+                        colSpan={2}
+                        className="px-4 py-2 text-center text-gray-400 border border-gray-300"
+                      >
+                        No deliverables
+                      </td>
+                    </tr>
+                  )}
+
+                  {mom.eia_deliverables?.map((d: Deliverable, i: number) => (
+                    <tr key={i} className="border border-gray-300">
+                      <td className="px-4 py-2 border-r border-gray-300 text-center">
+                        {i + 1}
+                      </td>
+
+                      <td className="px-4 py-2">
+                        {isEditMode ? (
+                          <Input
+                            value={d.particular}
+                            onChange={(e) => {
+                              const newDeliverables = [
+                                ...(mom.eia_deliverables ?? []),
+                              ];
+
+                              newDeliverables[i] = {
+                                ...newDeliverables[i],
+                                particular: e.target.value,
+                              };
+
+                              setMom({
+                                ...mom,
+                                eia_deliverables: newDeliverables,
+                              });
+                            }}
+                          />
+                        ) : (
+                          d.particular
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
-          {/* Deliverables */}
-          <div className="mb-2">
-            <h4 className="font-bold text-gray-900 underline underline-offset-2 mb-3 text-[15px]">
-              Deliverables:
-            </h4>
+          <PageFooter />
+        </div>
 
-            <p className="font-semibold text-sm text-gray-900 underline underline-offset-2 mb-2">
-              1. From Client
-            </p>
-            <table className="w-full text-sm text-left mb-6 border border-gray-400 border-collapse">
-              <thead>
-                <tr className="bg-[#70AD47] text-white">
-                  <th className="px-4 py-2 w-20 border-r border-white/40 font-semibold">
-                    Sr. No.
-                  </th>
-                  <th className="px-4 py-2 font-semibold">Particulars</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(mom.client_deliverables?.length ?? 0) === 0 && (
-                  <tr>
-                    <td
-                      colSpan={2}
-                      className="px-4 py-2 text-center text-gray-400 border border-gray-300"
-                    >
-                      No deliverables
-                    </td>
-                  </tr>
-                )}
-                {mom.client_deliverables?.map((d: Deliverable, i: number) => (
-                  <tr key={i} className="border border-gray-300">
-                    <td className="px-4 py-2 border-r border-gray-300 text-center">
-                      {i + 1}
-                    </td>
-                    <td className="px-4 py-2">
-                      {isEditMode ? (
-                        <Input
-                          value={d.particular}
-                          onChange={(e) => {
-                            const newD = [...(mom.client_deliverables ?? [])];
-                            newD[i] = {
-                              ...newD[i],
-                              particular: e.target.value,
-                            };
-                            setMom({ ...mom, client_deliverables: newD });
-                          }}
-                        />
-                      ) : (
-                        d.particular
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {/* ============ PAGE 2 (last): header + disclosure + footer ============ */}
+        <div
+          ref={page2Ref}
+          className="flex flex-col bg-white"
+          style={{
+            width: `${PAGE_WIDTH_PX}px`,
+            minHeight: `${PAGE_HEIGHT_PX}px`,
+            boxSizing: "border-box",
+          }}
+        >
+          <Letterhead />
 
-            <p className="font-semibold text-sm text-gray-900 underline underline-offset-2 mb-2">
-              2. From EIA
-            </p>
-            <table className="w-full text-sm text-left border border-gray-400 border-collapse">
-              <thead>
-                <tr className="bg-[#70AD47] text-white">
-                  <th className="px-4 py-2 w-20 border-r border-white/40 font-semibold">
-                    Sr. No.
-                  </th>
-                  <th className="px-4 py-2 font-semibold">Particulars</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(mom.eia_deliverables?.length ?? 0) === 0 && (
-                  <tr>
-                    <td
-                      colSpan={2}
-                      className="px-4 py-2 text-center text-gray-400 border border-gray-300"
-                    >
-                      No deliverables
-                    </td>
-                  </tr>
-                )}
-                {mom.eia_deliverables?.map((d: Deliverable, i: number) => (
-                  <tr key={i} className="border border-gray-300">
-                    <td className="px-4 py-2 border-r border-gray-300 text-center">
-                      {i + 1}
-                    </td>
-                    <td className="px-4 py-2">
-                      {isEditMode ? (
-                        <Input
-                          value={d.particular}
-                          onChange={(e) => {
-                            const newD = [...(mom.eia_deliverables ?? [])];
-                            newD[i] = {
-                              ...newD[i],
-                              particular: e.target.value,
-                            };
-                            setMom({ ...mom, eia_deliverables: newD });
-                          }}
-                        />
-                      ) : (
-                        d.particular
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex-1 px-8 md:px-14 pb-6 md:pb-8 pt-10">
+            {/* REGULATORY DISCLOSURE CARD */}
+            <div className="bg-gray-100 rounded-2xl border-l-[6px] border-ekvity-green px-6 md:px-8 py-6 text-[11px] leading-[1.7] text-gray-700">
+              <h3 className="text-lg md:text-xl font-bold text-ekvity-blue mb-3">
+                {COMPANY_CONFIG.name}
+              </h3>
+
+              <p>
+                SEBI Registered Investment Advisers Registration No.{" "}
+                {COMPLIANCE.sebiRegNo}
+              </p>
+
+              <p>
+                (Type of Registration- {COMPLIANCE.regType}, Validity of
+                Registration - {COMPLIANCE.regValidity})
+              </p>
+
+              <p>BSE Enlistment No. {COMPLIANCE.bseEnlistmentNo}</p>
+
+              <p className="mt-3">
+                Investment in securities market are subject to market risks.
+                Read all the related documents carefully before investing.
+              </p>
+
+              <p className="mt-2">
+                Registration granted by SEBI, enlistment as IA with Exchange and
+                certification from National Institute of Securities Markets
+                (NISM) in no way guarantee performance of the intermediary or
+                provide any assurance of returns to investors.
+              </p>
+
+              <p className="mt-3">Address: {COMPLIANCE.registeredAddress}</p>
+
+              <p>
+                Contact No: {COMPLIANCE.contactNo} | Email:{" "}
+                {COMPLIANCE.investorsEmail}
+              </p>
+
+              <p className="mt-2">
+                SEBI regional/local office address -{" "}
+                {COMPLIANCE.sebiOfficeAddress}
+              </p>
+
+              <p className="mt-3">
+                Principal &amp; Grievance Officer:{" "}
+                {COMPLIANCE.principalOfficer.name}
+                <br className="hidden md:block" />
+                Contact No: {COMPLIANCE.principalOfficer.contact} | Email:{" "}
+                {COMPLIANCE.principalOfficer.email}
+              </p>
+
+              <p className="mt-2">
+                Compliance Officer: {COMPLIANCE.complianceOfficer.name}
+                <br className="hidden md:block" />
+                Contact No: {COMPLIANCE.complianceOfficer.contact} | Email:{" "}
+                {COMPLIANCE.complianceOfficer.email}
+              </p>
+
+              <p className="mt-4 font-semibold text-gray-900">
+                Persons Associated with Investment Advice:
+              </p>
+
+              {COMPLIANCE.personsAssociated.map((person, i) => (
+                <p key={person.email}>
+                  {i + 1}) {person.name} — Contact No: {person.contact} | Email:{" "}
+                  {person.email}
+                </p>
+              ))}
+            </div>
           </div>
 
-          {/* Place */}
-          <div className="mt-14 text-sm text-gray-800">
-            <p className="font-bold underline underline-offset-2 mb-1">
-              Place:
-            </p>
-
-            {COMPANY_CONFIG.place.lines.map((line, i) => (
-              <p key={i}>{line}</p>
-            ))}
-          </div>
-
-          {/* Thank you */}
-          <p className="text-center text-sm text-gray-700 italic mt-10 mb-8">
-            *Thank You*
-          </p>
-
-          {/* Regulatory footer block */}
-          <div className="border border-gray-400 px-6 py-5 text-center text-[11px] leading-[1.7] text-gray-700">
-            <p className="font-bold text-gray-900 mb-1">
-              {COMPANY_CONFIG.name}
-            </p>
-            <p>
-              SEBI Registered Investment Advisers Registration No.{" "}
-              {COMPLIANCE.sebiRegNo} BSE Enlistment No.{" "}
-              {COMPLIANCE.bseEnlistmentNo}
-            </p>
-            <p>
-              (Type of Registration- {COMPLIANCE.regType}, Validity of
-              Registration - {COMPLIANCE.regValidity})
-            </p>
-            <p className="mt-1">
-              Investment in securities market are subject to market risks. Read
-              all the related documents carefully before investing. Registration
-              granted by SEBI, enlistment as IA with Exchange and certification
-              from National Institute of Securities Markets (NISM) in no way
-              guarantee performance of the intermediary or provide any assurance
-              of returns to investors.
-            </p>
-            <p className="mt-1">Address: {COMPLIANCE.registeredAddress}</p>
-            <p>
-              Contact No: {COMPLIANCE.contactNo}, Email:{" "}
-              {COMPLIANCE.investorsEmail}
-            </p>
-            <p className="mt-1">
-              SEBI regional/local office address -{" "}
-              {COMPLIANCE.sebiOfficeAddress}
-            </p>
-            <p className="mt-1">
-              Principal &amp; Grievance Officer:{" "}
-              {COMPLIANCE.principalOfficer.name}, Contact No:{" "}
-              {COMPLIANCE.principalOfficer.contact}, Email:{" "}
-              {COMPLIANCE.principalOfficer.email}
-            </p>
-            <p>
-              Compliance Officer: {COMPLIANCE.complianceOfficer.name}, Contact
-              No: {COMPLIANCE.complianceOfficer.contact}, Email:{" "}
-              {COMPLIANCE.complianceOfficer.email}
-            </p>
-            <p className="mt-1">Persons Associated with Investment Advice:</p>
-            <p>
-              1) {userProfile?.name}
-              {userProfile?.email ? `, Email: ${userProfile.email}` : ""}
-            </p>
-          </div>
+          <PageFooter />
         </div>
       </div>
+
+      {/* EMAIL MODAL */}
+      <SendMomEmailModal
+        open={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        mom={{
+          id: mom.id,
+          meeting_title: mom.meeting_title,
+        }}
+        senderName={userProfile?.name || ""}
+        senderEmail={userProfile?.email || ""}
+        generatePdf={generateMomPdf}
+      />
     </div>
   );
 }

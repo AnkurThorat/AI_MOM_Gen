@@ -18,6 +18,8 @@ export type Database = {
         Row: {
           id: string;
           full_name: string | null;
+          signature_1_url: string | null;
+          signature_2_url: string | null;
         };
         Insert: {
           id: string;
