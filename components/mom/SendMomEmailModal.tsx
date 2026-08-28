@@ -36,6 +36,9 @@ interface SendMomEmailModalProps {
 
   senderEmail: string;
 
+  pdfBlob: Blob | null;
+
+
   generatePdf: () => Promise<Blob>;
 }
 
@@ -57,6 +60,7 @@ export default function SendMomEmailModal({
   mom,
   senderName,
   senderEmail,
+  pdfBlob,
   generatePdf,
 }: SendMomEmailModalProps) {
   const [recipientEmail, setRecipientEmail] = useState("");
@@ -275,36 +279,36 @@ Ekvity Investment Advisors`);
        *
        * generatePdf returns a Blob.
        */
-      const pdfBlob = await generatePdf();
+const finalPdfBlob = pdfBlob ?? (await generatePdf());
 
-      if (!pdfBlob) {
-        throw new Error("Failed to generate the MoM PDF.");
-      }
+if (!finalPdfBlob) {
+  throw new Error("Failed to generate the MoM PDF.");
+}
 
       /*
        * Check PDF size.
        */
-      console.log(
-        "Generated PDF size:",
-        `${(pdfBlob.size / 1024 / 1024).toFixed(2)} MB`,
-      );
+console.log(
+  "Generated PDF size:",
+  `${(finalPdfBlob.size / 1024 / 1024).toFixed(2)} MB`,
+);
 
-      if (pdfBlob.size > 8 * 1024 * 1024) {
-        throw new Error(
-          "The MoM PDF is too large to send. Please reduce the PDF size.",
-        );
-      }
+if (finalPdfBlob.size > 8 * 1024 * 1024) {
+  throw new Error(
+    "The MoM PDF is too large to send. Please reduce the PDF size.",
+  );
+}
 
       /*
        * Convert Blob to File.
        */
-      const pdfFile = new File(
-        [pdfBlob],
-        `${mom.meeting_title || "Minutes-of-Meeting"}.pdf`,
-        {
-          type: "application/pdf",
-        },
-      );
+     const pdfFile = new File(
+       [finalPdfBlob],
+       `${mom.meeting_title || "Minutes-of-Meeting"}.pdf`,
+       {
+         type: "application/pdf",
+       },
+     );
 
       /*
        * Prepare FormData.

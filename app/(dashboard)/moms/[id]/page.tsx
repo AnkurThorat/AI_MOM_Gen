@@ -18,6 +18,7 @@ import {
   CheckCircle,
   RefreshCw,
   Mail,
+  FileText,
 } from "lucide-react";
 
 import { COMPANY_CONFIG } from "@/lib/config/company";
@@ -216,15 +217,6 @@ function PageFooter() {
   );
 }
 
-// Screenshots one page section and drops it into the PDF, starting a new
-// PDF page first unless it's the very first section. Reuses the same
-// "slice a tall image across pages" logic per section, so a section IS
-// allowed to overflow one page on its own if its content is unusually long.
-// ponytail: an overflowing section repeats neither its header nor its
-// footer on the extra pages it spills onto (they're baked into one
-// screenshot, not re-rendered per page) — fine for meeting-note-length
-// content; if long MoMs become common, that needs real per-page reflow
-// (e.g. Paged.js or server-side rendering), not a bigger screenshot hack.
 async function addSectionToPdf(
   pdf: jsPDF,
   sectionEl: HTMLElement,
@@ -364,6 +356,13 @@ export default function MoMReviewPage({
   const [emailModalOpen, setEmailModalOpen] = useState(false);
 
   const generatingRef = useRef(false);
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
+
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+
+  const [generatedPdfBlob, setGeneratedPdfBlob] = useState<Blob | null>(null);
+
+  const [generatingPdfPreview, setGeneratingPdfPreview] = useState(false);
 
   /*
    * IMPORTANT:
@@ -652,6 +651,45 @@ export default function MoMReviewPage({
     }
   };
 
+  const handlePreviewPdf = async () => {
+    try {
+      setGeneratingPdfPreview(true);
+
+      const pdfBlob = await generateMomPdf();
+
+      if (!pdfBlob) {
+        throw new Error("Failed to generate PDF preview.");
+      }
+
+      // Remove old preview URL to prevent memory leaks.
+      if (pdfPreviewUrl) {
+        URL.revokeObjectURL(pdfPreviewUrl);
+      }
+
+      const previewUrl = URL.createObjectURL(pdfBlob);
+
+      // Store the actual PDF.
+      // This same Blob will be reused for download and email.
+      setGeneratedPdfBlob(pdfBlob);
+
+      // Store the browser preview URL.
+      setPdfPreviewUrl(previewUrl);
+
+      // Open preview modal.
+      setPdfPreviewOpen(true);
+    } catch (error) {
+      console.error("PDF preview error:", error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Failed to generate PDF preview.",
+      );
+    } finally {
+      setGeneratingPdfPreview(false);
+    }
+  };
+
   /*
    * Download PDF.
    */
@@ -816,19 +854,38 @@ export default function MoMReviewPage({
 
           {mom.status === "final" && (
             <>
-              <Button variant="outline" onClick={handlePrint}>
+              {/* <Button variant="outline" onClick={handlePrint}>
                 <Printer className="w-4 h-4 mr-2" />
                 Print
-              </Button>
+              </Button> */}
 
               <Button
+                type="button"
+                variant="outline"
+                onClick={handlePreviewPdf}
+                disabled={generatingPdfPreview}
+              >
+                {generatingPdfPreview ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Generating Preview...
+                  </>
+                ) : (
+                  <>
+                    <FileText className="mr-2 h-4 w-4" />
+                    Preview PDF
+                  </>
+                )}
+              </Button>
+
+              {/* <Button
                 type="button"
                 onClick={handleSavePdf}
                 className="bg-ekvity-blue hover:bg-ekvity-blue/90"
               >
                 <Download className="w-4 h-4 mr-2" />
                 Save PDF
-              </Button>
+              </Button> */}
 
               <Button
                 type="button"
@@ -1228,6 +1285,87 @@ export default function MoMReviewPage({
         </div>
       </div>
 
+      {pdfPreviewOpen && pdfPreviewUrl && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div className="flex h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+            {/* HEADER */}
+            <div className="flex items-center justify-between border-b px-6 py-4">
+              <div>
+                <h2 className="text-xl font-semibold text-ekvity-blue">
+                  PDF Preview
+                </h2>
+
+                <p className="text-sm text-gray-500">
+                  Review the Minutes of Meeting before downloading or sending.
+                </p>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setPdfPreviewOpen(false)}
+              >
+                Close
+              </Button>
+            </div>
+
+            {/* PDF VIEWER */}
+            <div className="flex-1 bg-gray-100 p-4">
+              <iframe
+                src={pdfPreviewUrl}
+                title="Minutes of Meeting PDF Preview"
+                className="h-full w-full rounded-lg border bg-white"
+              />
+            </div>
+
+            {/* FOOTER */}
+            <div className="flex flex-wrap justify-end gap-3 border-t px-6 py-4">
+              {/* DOWNLOAD */}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  if (!generatedPdfBlob) return;
+
+                  const url = URL.createObjectURL(generatedPdfBlob);
+
+                  const link = document.createElement("a");
+
+                  link.href = url;
+
+                  link.download = `${mom.meeting_title || "Minutes-of-Meeting"}.pdf`;
+
+                  document.body.appendChild(link);
+
+                  link.click();
+
+                  document.body.removeChild(link);
+
+                  URL.revokeObjectURL(url);
+                }}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Download PDF
+              </Button>
+
+              {/* EMAIL */}
+              <Button
+                type="button"
+                className="bg-ekvity-green hover:bg-ekvity-green/90"
+                onClick={() => {
+                  setPdfPreviewOpen(false);
+
+                  setEmailModalOpen(true);
+                }}
+              >
+                <Mail className="mr-2 h-4 w-4" />
+                Send via Email
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* EMAIL MODAL */}
       <SendMomEmailModal
         open={emailModalOpen}
@@ -1238,6 +1376,7 @@ export default function MoMReviewPage({
         }}
         senderName={userProfile?.name || ""}
         senderEmail={userProfile?.email || ""}
+        pdfBlob={generatedPdfBlob}
         generatePdf={generateMomPdf}
       />
     </div>
