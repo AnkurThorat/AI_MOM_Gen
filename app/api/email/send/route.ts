@@ -204,18 +204,6 @@ export async function POST(request: Request) {
         })
         .eq("id", historyId);
     }
-
-    console.log("Email sent successfully:", {
-      resendId: data?.id,
-      momId,
-      from,
-      to,
-      pdfName: pdf.name,
-      pdfSize: pdf.size,
-      signature1Attached: !!signature1,
-      signature2Attached: !!signature2,
-    });
-
     return NextResponse.json({
       success: true,
       message: "Email sent successfully.",

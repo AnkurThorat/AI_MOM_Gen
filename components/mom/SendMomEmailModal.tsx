@@ -427,8 +427,6 @@ if (finalPdfBlob.size > 8 * 1024 * 1024) {
         );
       }
 
-      console.log("Email sent successfully:", result);
-
       alert(result.message || "Email sent successfully.");
 
       onClose();
