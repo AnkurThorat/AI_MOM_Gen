@@ -1108,7 +1108,7 @@ export default function MoMReviewPage({
             </p>
           </div>
 
-          <div className="h-1.5 mt-4" style={{ background: BRAND_GRADIENT }} />
+          <div className="h-1.5 mt-1" style={{ background: BRAND_GRADIENT }} />
         </div>
       </div>
 
@@ -1122,6 +1122,7 @@ export default function MoMReviewPage({
         }}
         senderName={userProfile?.name || ""}
         senderEmail={userProfile?.email || ""}
+        pdfBlob={null}
         generatePdf={generateMomPdf}
       />
     </div>

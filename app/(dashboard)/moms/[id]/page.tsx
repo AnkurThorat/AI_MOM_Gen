@@ -108,7 +108,10 @@ const COMPLIANCE = {
 
 // Brand gradient used for the diagonal blue -> green divider bars.
 const BRAND_GRADIENT =
-  "linear-gradient(78deg, #12294B 0%, #12294B 46%, #2E9E5B 54%, #2E9E5B 100%)";
+  "linear-gradient(78deg, #104C8E 0%, #104C8E 34%, #FFFFFF 34%, #FFFFFF 34.5%, #0B9D6A 34.5%, #0B9D6A 100%)";
+  
+  const BRAND_GRADIENT_footer =
+    "linear-gradient(78deg, #104C8E 0%, #104C8E 34%, #FFFFFF 34%, #FFFFFF 34.5%, #0B9D6A 34.5%, #0B9D6A 100%)";
 
 function renderFormatted(text: string) {
   return text.split(/(\*\*[^*]+\*\*)/g).map((chunk, i) =>
@@ -189,7 +192,7 @@ function Letterhead() {
 // Same repeat-per-page situation as the letterhead above.
 function PageFooter() {
   return (
-    <div className="px-8 md:px-14 pt-6">
+    <div className="px-8 md:px-14 pt-6 pb-3">
       <div className="flex items-end justify-between gap-6 text-[9px] leading-[1.6] text-gray-500 border-t border-gray-200 pt-3">
         <div>
           <p>Regd. Add.: {COMPLIANCE.registeredAddress}</p>
@@ -201,7 +204,6 @@ function PageFooter() {
           </p>
         </div>
 
-        {/* Optional decade-mark logo — add /public/10ure_logo.png to show it */}
         <img
           src="/10ure_logo.png"
           alt=""
@@ -212,7 +214,13 @@ function PageFooter() {
         />
       </div>
 
-      <div className="h-1.5 mt-3" style={{ background: BRAND_GRADIENT }} />
+      {/* Green → white diagonal cut → blue */}
+      <div
+        className="h-3.5 mt-1"
+        style={{
+          background: BRAND_GRADIENT_footer,
+        }}
+      />
     </div>
   );
 }

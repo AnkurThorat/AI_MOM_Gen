@@ -11,6 +11,8 @@ export type Deliverable = {
   particular: string;
 };
 
+export type EmailStatus = "pending" | "sent" | "failed";
+
 export type Database = {
   public: {
     Tables: {
@@ -93,6 +95,62 @@ export type Database = {
           created_by?: string;
         };
         Relationships: [];
+      };
+      mom_email_history: {
+        Row: {
+          id: string;
+          mom_id: string;
+          recipient_email: string;
+          recipient_name: string | null;
+          subject: string;
+          message: string | null;
+          status: EmailStatus;
+          sent_by_name: string | null;
+          sent_by_email: string | null;
+          sent_at: string | null;
+          created_at: string;
+          error_message: string | null;
+          provider_message_id: string | null;
+        };
+        Insert: {
+          id?: string;
+          mom_id: string;
+          recipient_email: string;
+          recipient_name?: string | null;
+          subject: string;
+          message?: string | null;
+          status?: EmailStatus;
+          sent_by_name?: string | null;
+          sent_by_email?: string | null;
+          sent_at?: string | null;
+          created_at?: string;
+          error_message?: string | null;
+          provider_message_id?: string | null;
+        };
+        Update: {
+          id?: string;
+          mom_id?: string;
+          recipient_email?: string;
+          recipient_name?: string | null;
+          subject?: string;
+          message?: string | null;
+          status?: EmailStatus;
+          sent_by_name?: string | null;
+          sent_by_email?: string | null;
+          sent_at?: string | null;
+          created_at?: string;
+          error_message?: string | null;
+          provider_message_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "mom_email_history_mom_id_fkey";
+            columns: ["mom_id"];
+            isOneToOne: false;
+            referencedRelation: "moms";
+            referencedColumns: ["id"];
+          },
+        ];
       };
     };
     Views: Record<string, never>;

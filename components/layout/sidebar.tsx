@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Plus, History } from "lucide-react";
+import { LayoutDashboard, Plus, History ,Mail } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/moms/create", label: "Create MoM", icon: Plus },
   { href: "/history", label: "History", icon: History },
+  { href: "/emails", label: "Email History", icon: Mail },
 ];
 
 export function Sidebar() {
