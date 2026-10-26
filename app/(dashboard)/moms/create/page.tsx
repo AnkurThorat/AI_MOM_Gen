@@ -10,6 +10,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Sparkles, Plus, Trash2 } from "lucide-react";
 import { Participant } from "@/types/database.types";
 import { postJson } from "@/lib/http";
+import SpeechToTextButton from "@/components/mom/SpeechToTextButton";
+import UploadRecordingButton from "@/components/mom/UploadRecordingButton";
 
 export default function CreateMoMPage() {
   const router = useRouter();
@@ -171,9 +173,7 @@ export default function CreateMoMPage() {
             </select>
           </div>
         </div>
-
         <hr className="border-gray-100" />
-
         {/* SECTION 2: Attendance */}
         <div className="space-y-4">
           <div className="flex justify-between items-center">
@@ -239,29 +239,84 @@ export default function CreateMoMPage() {
             ))}
           </div>
         </div>
-
         <hr className="border-gray-100" />
-
         {/* SECTION 3: Summary */}
-        <div className="space-y-2">
-          <Label className="text-lg">
-            Basic Meeting Summary <span className="text-red-500">*</span>
-          </Label>
-          <p className="text-sm text-gray-500 mb-2">
-            Write the points in your own words. AI will structure it into a
-            professional MoM.
-          </p>
+        <div className="space-y-3">
+          <div>
+            <Label className="text-lg">
+              Basic Meeting Summary <span className="text-red-500">*</span>
+            </Label>
+
+            <p className="mt-1 text-sm text-gray-500">
+              Write your meeting points, speak directly, or upload an existing
+              meeting/call recording. AI will structure it into a professional
+              MoM.
+            </p>
+          </div>
+
           <Textarea
             required
             value={rawNotes}
             onChange={(e) => setRawNotes(e.target.value)}
-            className="min-h-[150px]"
-            placeholder="Pranati and Mriganka will start FCSSIP from August..."
+            className="min-h-[180px]"
+            placeholder="Write your meeting notes, speak using the microphone, or upload a meeting recording..."
           />
+
+          <div className="rounded-lg border bg-gray-50 p-4">
+            <div className="mb-3">
+              <p className="text-sm font-medium text-gray-800">
+                Add meeting content
+              </p>
+
+              <p className="text-xs text-gray-500">
+                You can type manually, speak directly, or upload a recording.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <SpeechToTextButton
+                  disabled={loading}
+                  onTranscript={(transcript) => {
+                    setRawNotes((previousNotes) => {
+                      if (!previousNotes.trim()) {
+                        return transcript;
+                      }
+
+                      return `${previousNotes}\n\n${transcript}`;
+                    });
+                  }}
+                />
+
+                <UploadRecordingButton
+                  disabled={loading}
+                  onTranscript={(transcript) => {
+                    setRawNotes((previousNotes) => {
+                      if (!previousNotes.trim()) {
+                        return transcript;
+                      }
+
+                      return `${previousNotes}\n\n${transcript}`;
+                    });
+                  }}
+                />
+              </div>
+
+              <div className="border-t pt-3">
+                <p className="text-xs text-gray-500">
+                  🎤 Speak directly or 📁 upload a phone, call, or meeting
+                  recording.
+                </p>
+
+                <p className="mt-1 text-xs text-gray-400">
+                  English • Hindi • Marathi • Gujarati • Mixed languages
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
-
+      
         {error && <p className="text-red-500 text-sm">{error}</p>}
-
         <div className="flex justify-end pt-4">
           <Button
             type="submit"
